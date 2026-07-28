@@ -1,0 +1,6 @@
+{
+  "name": "PolyGlot Reader",
+  "description": "Multilingual book reader with natural voice TTS, Tamil support, real-time translation & educational tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
