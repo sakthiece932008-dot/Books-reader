@@ -103,9 +103,34 @@ export default function ReaderScreen() {
   }, [currentPageIndex, bookmarks, pages.length]);
 
   const [speakingParagraphIdx, setSpeakingParagraphIdx] = useState<number | null>(null);
+  
+  // Advanced TTS Control Panel State
+  const [isTtsPanelOpen, setIsTtsPanelOpen] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
+  
+  // Settings State
+  const [autoTranslateEnabled, setAutoTranslateEnabled] = useState(false);
+  
+  useEffect(() => {
+    const loadVoices = () => {
+      setAvailableVoices(window.speechSynthesis.getVoices());
+    };
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+  }, []);
+
+  // Sync auto-translate
+  useEffect(() => {
+    if (autoTranslateEnabled && readingMode === 'standard') {
+      setReadingMode('dual');
+    }
+  }, [autoTranslateEnabled]);
 
   // TTS Speech Synthesis Engine with Tamil Voice & Line-by-Line Highlighting
   useEffect(() => {
+    let isActive = true;
+
     if (isPlaying && pages[currentPageIndex]) {
       window.speechSynthesis.cancel();
       const rawText = pages[currentPageIndex];
@@ -114,53 +139,125 @@ export default function ReaderScreen() {
       let pIndex = 0;
       
       const speakNextParagraph = () => {
+        if (!isActive) return;
+
         if (pIndex >= paras.length) {
-          setIsPlaying(false);
-          setSpeakingParagraphIdx(null);
+          // Auto Page Shifting
+          if (currentPageIndex < pages.length - 1) {
+            setCurrentPageIndex(prev => prev + 1);
+          } else {
+            setIsPlaying(false);
+            setSpeakingParagraphIdx(null);
+          }
           return;
         }
 
         setSpeakingParagraphIdx(pIndex);
         const paraText = paras[pIndex];
-        // Clean out transliteration/translation brackets if reading raw page
-        const textToRead = paraText.replace(/\[Transliteration:.*?\]/g, '').replace(/\[Translation:.*?\]/g, '').trim();
-
-        const utterance = new SpeechSynthesisUtterance(textToRead || paraText);
-        utterance.rate = speechRate;
         
-        // Find best Tamil voice if book is Tamil or Tamil speech requested
-        const isTamilBook = book?.language === 'ta';
-        utterance.lang = isTamilBook ? 'ta-IN' : 'en-US';
+        // Clean out transliteration/translation brackets if reading raw page
+        let textToRead = paraText.replace(/\[Transliteration:.*?\]/gi, '').replace(/\[Translation:.*?\]/gi, '').trim();
+        let utteranceLang = book?.language === 'ta' ? 'ta-IN' : 'en-US';
+        let useTamilVoice = book?.language === 'ta';
 
-        const voices = window.speechSynthesis.getVoices();
-        if (isTamilBook) {
-          const taVoice = voices.find(v => v.lang.includes('ta') || v.name.toLowerCase().includes('tamil'));
-          if (taVoice) utterance.voice = taVoice;
+        // Override to read the Tamil Translation if we are translating English -> Tamil
+        if (readingMode !== 'standard' && liveTranslations[currentPageIndex] && liveTranslations[currentPageIndex][pIndex]) {
+           const isSourceTamil = book?.language === 'ta';
+           if (!isSourceTamil && targetLanguage === 'ta') {
+              textToRead = liveTranslations[currentPageIndex][pIndex];
+              utteranceLang = 'ta-IN';
+              useTamilVoice = true;
+           }
         }
 
+        // If the text has no alphabetical characters or Tamil characters, skip it
+        if (!textToRead || !/[a-zA-Z\u0B80-\u0BFF]/.test(textToRead)) {
+          pIndex++;
+          speakNextParagraph();
+          return;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(textToRead);
+        (window as any)._currentUtterance = utterance; // Prevent garbage collection bug in Chrome
+        utterance.rate = speechRate;
+        utterance.lang = utteranceLang;
+
+        const voices = window.speechSynthesis.getVoices();
+        if (selectedVoiceURI) {
+           const specificVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
+           if (specificVoice) utterance.voice = specificVoice;
+        } else if (useTamilVoice) {
+           const taVoice = voices.find(v => v.lang.includes('ta') || v.name.toLowerCase().includes('tamil'));
+           if (taVoice) utterance.voice = taVoice;
+        } else {
+           const enVoice = voices.find(v => v.lang.includes('en'));
+           if (enVoice) utterance.voice = enVoice;
+        }
+
+        // --- TTS DEBUG LOGGING START ---
+        console.group(`[TTS DEBUG] Synthesis Pipeline - Paragraph ${pIndex}`);
+        console.log("Raw Unicode Chunk length:", textToRead.length);
+        console.log("Text snippet:", textToRead.substring(0, 50) + (textToRead.length > 50 ? '...' : ''));
+        console.log("Configured Utterance Language:", utterance.lang);
+        console.log("Selected Voice Name:", utterance.voice?.name || "System Default");
+        console.log("Selected Voice URI:", utterance.voice?.voiceURI || "System Default");
+        console.log("Is Tamil Voice Expected?", useTamilVoice);
+        console.groupEnd();
+        // --- TTS DEBUG LOGGING END ---
+
+        utterance.onstart = () => {
+          console.log(`[TTS DEBUG] onstart triggered for paragraph ${pIndex}`);
+        };
+
         utterance.onend = () => {
-          pIndex++;
-          speakNextParagraph();
+          console.log(`[TTS DEBUG] onend triggered for paragraph ${pIndex}`);
+          if (isActive) {
+            pIndex++;
+            speakNextParagraph();
+          }
         };
 
-        utterance.onerror = () => {
-          pIndex++;
-          speakNextParagraph();
+        utterance.onerror = (event) => {
+          console.error(`[TTS DEBUG] onerror triggered for paragraph ${pIndex}`, event);
+          if (isActive) {
+            pIndex++;
+            speakNextParagraph();
+          }
         };
 
-        window.speechSynthesis.speak(utterance);
+        // Call speak with a tiny delay to prevent overlap issues
+        setTimeout(() => {
+          if (isActive) window.speechSynthesis.speak(utterance);
+        }, 10);
       };
 
-      speakNextParagraph();
+      // Delay initial speak to ensure cancel() finishes
+      setTimeout(() => {
+        speakNextParagraph();
+      }, 50);
+
     } else {
       window.speechSynthesis.cancel();
       setSpeakingParagraphIdx(null);
     }
 
     return () => {
+      isActive = false;
       window.speechSynthesis.cancel();
     };
-  }, [isPlaying, currentPageIndex, pages, speechRate, book]);
+  }, [isPlaying, currentPageIndex, pages, speechRate, book, selectedVoiceURI, readingMode, liveTranslations, targetLanguage]);
+
+  // Keep TTS alive for long reading sessions (Chrome bug workaround)
+  useEffect(() => {
+    let interval: any;
+    if (isPlaying) {
+      interval = setInterval(() => {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      }, 10000); // every 10s
+    }
+    return () => clearInterval(interval);
+  }, [isPlaying]);
 
   // Live Dual Language Translation Trigger
   useEffect(() => {
@@ -506,11 +603,12 @@ export default function ReaderScreen() {
             {/* Audio TTS Player Button */}
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setSpeechRate(r => r === 1.0 ? 1.25 : r === 1.25 ? 1.5 : 1.0)}
-                className="px-2 py-0.5 rounded text-[10px] font-bold bg-black/5 dark:bg-white/10 hover:bg-black/10"
-                title="Change Speech Speed"
+                onClick={() => setIsTtsPanelOpen(!isTtsPanelOpen)}
+                className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+                  isTtsPanelOpen ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' : 'bg-black/5 dark:bg-white/10 hover:bg-black/10'
+                }`}
               >
-                {speechRate}x
+                <Volume2 className="w-3.5 h-3.5 inline mr-1" /> Settings
               </button>
 
               <button 
@@ -526,6 +624,52 @@ export default function ReaderScreen() {
               </button>
             </div>
           </div>
+
+          {/* Expanded TTS Control Panel */}
+          {isTtsPanelOpen && (
+             <div className="mt-3 p-4 rounded-xl bg-gray-50 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700 animate-in slide-in-from-bottom-2 duration-200">
+                <div className="flex flex-col gap-4">
+                   <div className="flex justify-between items-center">
+                     <span className="text-sm font-semibold">Speech Settings</span>
+                     <button onClick={() => setIsTtsPanelOpen(false)}><X className="w-4 h-4 text-gray-400" /></button>
+                   </div>
+                   
+                   <div className="grid grid-cols-2 gap-4">
+                     <div className="space-y-2">
+                        <label className="text-xs font-medium text-gray-500 uppercase">Voice Selection</label>
+                        <select 
+                          value={selectedVoiceURI} 
+                          onChange={(e) => setSelectedVoiceURI(e.target.value)}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg p-2 text-sm"
+                        >
+                          <option value="">Auto (Default Tamil/English)</option>
+                          {availableVoices.filter(v => v.lang.includes('ta') || v.lang.includes('en')).map(v => (
+                             <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
+                          ))}
+                        </select>
+                     </div>
+                     <div className="space-y-2">
+                        <label className="text-xs font-medium text-gray-500 uppercase">Playback Rate</label>
+                        <div className="flex items-center gap-2">
+                           {[0.75, 1.0, 1.25, 1.5].map(rate => (
+                             <button
+                               key={rate}
+                               onClick={() => setSpeechRate(rate)}
+                               className={`flex-1 py-1.5 rounded-md text-xs font-bold border transition-all ${
+                                 speechRate === rate 
+                                 ? 'bg-amber-600 text-white border-amber-600' 
+                                 : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                               }`}
+                             >
+                               {rate}x
+                             </button>
+                           ))}
+                        </div>
+                     </div>
+                   </div>
+                </div>
+             </div>
+          )}
         </div>
       </footer>
 
@@ -606,6 +750,33 @@ export default function ReaderScreen() {
                   className="flex-1 accent-[var(--primary)] h-1.5 bg-gray-200 rounded-lg cursor-pointer"
                 />
                 <span className="text-lg font-bold">A</span>
+              </div>
+            </div>
+
+            {/* Translation Preferences */}
+            <div className="pt-4 border-t border-gray-200 dark:border-gray-800 space-y-3">
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Translation Preferences</h4>
+              
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium">Always Translate (Auto Dual-Mode)</span>
+                <button 
+                  onClick={() => setAutoTranslateEnabled(!autoTranslateEnabled)}
+                  className={`w-10 h-5 rounded-full relative transition-colors ${autoTranslateEnabled ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${autoTranslateEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+              </div>
+
+              <div className="space-y-2 pt-2">
+                <label className="text-xs font-medium text-gray-500">Target Language</label>
+                <select 
+                  value={targetLanguage} 
+                  onChange={(e) => setTargetLanguage(e.target.value as 'ta' | 'en')}
+                  className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2 text-sm"
+                >
+                  <option value="en">English (Translation from Tamil)</option>
+                  <option value="ta">Tamil (Translation from English)</option>
+                </select>
               </div>
             </div>
           </div>

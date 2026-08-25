@@ -8,6 +8,8 @@
     "start": "node dist/server.cjs"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@google/genai": "^2.13.0",
     "clsx": "^2.1.1",
     "express": "^4.21.0",
@@ -21,6 +23,7 @@
     "tailwind-merge": "^2.5.4"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/express": "^5.0.0",
     "@types/react": "^18.3.11",
