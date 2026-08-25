@@ -29,9 +29,11 @@ export default function ReaderScreen() {
   const [isTocOpen, setIsTocOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Live Dual Language Translation Cache
+  // Live Dual Language Translation & Transliteration Cache
   const [liveTranslations, setLiveTranslations] = useState<Record<number, string[]>>({});
+  const [liveTransliterations, setLiveTransliterations] = useState<Record<number, string[]>>({});
   const [isTranslatingPage, setIsTranslatingPage] = useState(false);
+  const [targetLanguage, setTargetLanguage] = useState<'ta' | 'en'>('ta');
 
   // Audio / Speech State
   const [isPlaying, setIsPlaying] = useState(false);
@@ -100,20 +102,61 @@ export default function ReaderScreen() {
     }
   }, [currentPageIndex, bookmarks, pages.length]);
 
-  // TTS Speech Synthesis Engine
+  const [speakingParagraphIdx, setSpeakingParagraphIdx] = useState<number | null>(null);
+
+  // TTS Speech Synthesis Engine with Tamil Voice & Line-by-Line Highlighting
   useEffect(() => {
     if (isPlaying && pages[currentPageIndex]) {
       window.speechSynthesis.cancel();
-      const currentText = pages[currentPageIndex];
-      const utterance = new SpeechSynthesisUtterance(currentText);
-      utterance.rate = speechRate;
-      utterance.lang = book?.language === 'ta' ? 'ta-IN' : 'en-US';
-      utterance.onend = () => setIsPlaying(false);
-      utterance.onerror = () => setIsPlaying(false);
-      window.speechSynthesis.speak(utterance);
+      const rawText = pages[currentPageIndex];
+      const paras = rawText.split('\n').filter(p => p.trim().length > 0);
+      
+      let pIndex = 0;
+      
+      const speakNextParagraph = () => {
+        if (pIndex >= paras.length) {
+          setIsPlaying(false);
+          setSpeakingParagraphIdx(null);
+          return;
+        }
+
+        setSpeakingParagraphIdx(pIndex);
+        const paraText = paras[pIndex];
+        // Clean out transliteration/translation brackets if reading raw page
+        const textToRead = paraText.replace(/\[Transliteration:.*?\]/g, '').replace(/\[Translation:.*?\]/g, '').trim();
+
+        const utterance = new SpeechSynthesisUtterance(textToRead || paraText);
+        utterance.rate = speechRate;
+        
+        // Find best Tamil voice if book is Tamil or Tamil speech requested
+        const isTamilBook = book?.language === 'ta';
+        utterance.lang = isTamilBook ? 'ta-IN' : 'en-US';
+
+        const voices = window.speechSynthesis.getVoices();
+        if (isTamilBook) {
+          const taVoice = voices.find(v => v.lang.includes('ta') || v.name.toLowerCase().includes('tamil'));
+          if (taVoice) utterance.voice = taVoice;
+        }
+
+        utterance.onend = () => {
+          pIndex++;
+          speakNextParagraph();
+        };
+
+        utterance.onerror = () => {
+          pIndex++;
+          speakNextParagraph();
+        };
+
+        window.speechSynthesis.speak(utterance);
+      };
+
+      speakNextParagraph();
     } else {
       window.speechSynthesis.cancel();
+      setSpeakingParagraphIdx(null);
     }
+
     return () => {
       window.speechSynthesis.cancel();
     };
@@ -132,14 +175,32 @@ export default function ReaderScreen() {
     setIsTranslatingPage(true);
 
     const paragraphs = rawPage.split('\n').filter(p => p.trim().length > 0);
-    const targetLang = book?.language === 'ta' ? 'en' : 'en';
+    const isSourceTamil = book?.language === 'ta';
+    const activeTarget = isSourceTamil ? 'en' : targetLanguage;
 
     try {
-      const translatedList = await api.translateLive(paragraphs, book?.language || 'auto', targetLang);
+      const translatedList = await api.translateLive(paragraphs, book?.language || 'auto', activeTarget);
       setLiveTranslations(prev => ({
         ...prev,
         [pageIdx]: translatedList
       }));
+
+      // Fetch Tamil Tanglish Transliterations if source or target is Tamil
+      if (isSourceTamil) {
+        const translitPromises = paragraphs.map(p => api.transliterate(p, 'Tamil'));
+        const translits = await Promise.all(translitPromises);
+        setLiveTransliterations(prev => ({
+          ...prev,
+          [pageIdx]: translits
+        }));
+      } else if (activeTarget === 'ta' && translatedList.length > 0) {
+        const translitPromises = translatedList.map(t => api.transliterate(t, 'Tamil'));
+        const translits = await Promise.all(translitPromises);
+        setLiveTransliterations(prev => ({
+          ...prev,
+          [pageIdx]: translits
+        }));
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -260,18 +321,26 @@ export default function ReaderScreen() {
 
         {/* Action Controls */}
         <div className="flex items-center gap-1 sm:gap-2">
-          {/* Mode Switcher Badge */}
+          {/* Tamil Live Reading Toggle */}
           <button
-            onClick={() => setReadingMode(m => m === 'standard' ? 'dual' : m === 'dual' ? 'interlinear' : 'standard')}
+            onClick={() => {
+              if (readingMode === 'standard') {
+                setReadingMode('dual');
+              } else if (readingMode === 'dual') {
+                setReadingMode('interlinear');
+              } else {
+                setReadingMode('standard');
+              }
+            }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all shadow-xs ${
               readingMode !== 'standard' 
-                ? 'bg-[var(--primary)] text-white' 
+                ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white' 
                 : 'bg-black/5 dark:bg-white/10 hover:bg-black/10'
             }`}
-            title="Toggle Live Translation View"
+            title="Toggle Tamil Live Translation & Phonetic Tanglish View"
           >
             <Globe className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline capitalize">{readingMode} View</span>
+            <span>{readingMode === 'standard' ? 'தமிழ் Translation' : readingMode === 'dual' ? 'தமிழ் Dual View' : 'தமிழ் Interlinear'}</span>
           </button>
 
           {/* Typography Settings Button */}
@@ -327,7 +396,17 @@ export default function ReaderScreen() {
             /* Standard Reading View */
             <div className="whitespace-pre-wrap leading-relaxed space-y-4">
               {paragraphs.map((para, idx) => (
-                <p key={idx} className="first-letter:text-2xl first-letter:font-bold">
+                <p 
+                  key={idx} 
+                  className={`first-letter:text-2xl first-letter:font-bold transition-all duration-300 p-2 rounded-xl ${
+                    speakingParagraphIdx === idx 
+                      ? 'bg-amber-500/10 border-l-4 border-amber-600 dark:border-amber-400 font-medium' 
+                      : ''
+                  }`}
+                >
+                  {speakingParagraphIdx === idx && (
+                    <Volume2 className="inline w-4 h-4 mr-2 text-amber-600 animate-pulse" />
+                  )}
                   {para}
                 </p>
               ))}
@@ -344,18 +423,30 @@ export default function ReaderScreen() {
 
               {paragraphs.map((para, idx) => {
                 const trans = currentTranslations[idx] || "";
+                const translit = liveTransliterations[currentPageIndex]?.[idx] || "";
+                const isSpeakingThis = speakingParagraphIdx === idx;
                 return (
-                  <div key={idx} className="space-y-2 pb-4 border-b border-black/5 dark:border-white/5">
+                  <div 
+                    key={idx} 
+                    className={`space-y-2 pb-4 border-b border-black/5 dark:border-white/5 transition-all p-2 rounded-xl ${
+                      isSpeakingThis ? 'bg-amber-500/10 border-l-4 border-amber-600' : ''
+                    }`}
+                  >
                     {/* Original Source Text */}
-                    <p className="font-semibold text-current">{para}</p>
+                    <p className="font-semibold text-current flex items-start gap-2">
+                      {isSpeakingThis && <Volume2 className="w-4 h-4 text-amber-600 shrink-0 animate-pulse mt-1" />}
+                      <span>{para}</span>
+                    </p>
                     
                     {/* Live Parallel Translation */}
                     {trans && (
-                      <div className="pl-4 border-l-2 border-[var(--primary)] text-sm opacity-90 font-sans italic space-y-1">
-                        <p className="text-[var(--primary)] font-medium">{trans}</p>
-                        {book?.language === 'ta' && readingMode === 'interlinear' && (
-                          <p className="text-xs opacity-75 not-italic font-mono">
-                            Phonetic: {para.split(' ').map(w => w).join(' ')}
+                      <div className="pl-4 border-l-2 border-amber-600 dark:border-amber-500 text-sm opacity-90 font-sans space-y-1">
+                        <p className="text-amber-700 dark:text-amber-400 font-medium italic">{trans}</p>
+                        
+                        {/* Tanglish / Tamil Phonetic Transliteration */}
+                        {(book?.language === 'ta' || translit) && (readingMode === 'interlinear' || translit) && (
+                          <p className="text-xs text-indigo-600 dark:text-indigo-400 font-mono not-italic bg-indigo-50 dark:bg-indigo-950/40 px-2.5 py-1 rounded-md inline-block">
+                            Phonetics (Tanglish): {translit || "Agara mudhala ezhutthellaam..."}
                           </p>
                         )}
                       </div>
@@ -424,10 +515,14 @@ export default function ReaderScreen() {
 
               <button 
                 onClick={() => setIsPlaying(!isPlaying)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--primary)] text-white font-semibold shadow-xs hover:bg-indigo-700 active:scale-95 transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-600 to-orange-600 text-white font-semibold shadow-xs hover:from-amber-700 hover:to-orange-700 active:scale-95 transition-all text-xs"
               >
                 {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                <span>{isPlaying ? "Pause Voice" : "Listen TTS"}</span>
+                <span>
+                  {isPlaying 
+                    ? (book?.language === 'ta' ? 'தமிழ் நிறுத்தவும் (Pause)' : 'Pause Voice') 
+                    : (book?.language === 'ta' ? 'தமிழ் குரல் வாசிப்பு (Read Tamil)' : 'Listen TTS')}
+                </span>
               </button>
             </div>
           </div>

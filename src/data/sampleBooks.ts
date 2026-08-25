@@ -14,22 +14,49 @@ export const initialSampleBooks: Omit<BookEntity, 'id' | 'addedTimestamp'>[] = [
     category: 'Tamil Classics',
     chapters: [
       {
-        title: 'Chapter 1: கடவுள் வாழ்த்து (Invocation of God)',
+        title: 'அத்தியாயம் 1: கடவுள் வாழ்த்து (Invocation)',
         pages: [
           `அகர முதல எழுத்தெல்லாம் ஆதி\nபகவன் முதற்றே உலகு.\n\n[Transliteration: Agara mudhala ezhutthellaam aadhi bhagavan mudhattre ulagu]\n[Translation: As the letter 'A' is the first of all letters, so the Primordial God is first in the world.]\n\nகற்றதனால் ஆய பயனென்கொல் வாலறிவன்\nநற்றாள் தொழாஅர் எனின்.\n\n[Transliteration: Kattradhanaal aaya payanengol vaalarivan natraal thozhaar enin]\n[Translation: What profit have those who learned if they worship not the sacred feet of Him who possesses pure knowledge?]`,
           `மலர்மிசை ஏகினான் மாணடி சேர்ந்தார்\nநிலமிசை நீடுவாழ் வார்.\n\n[Transliteration: Malarmisai aeginaan maanadi saerndhaar nilamisai needuvaazh vaar]\n[Translation: They who cling to the glorious feet of Him who dwells in the lotus heart of devotion shall live long upon the earth.]\n\nவேண்டுதல் வேண்டாமை இலானடி சேர்ந்தார்க்கு\nயாண்டும் இடும்பை இல.\n\n[Transliteration: Vaenduthal vaendaamai ilaanadi saerndhaarkku yaandum idumpai ila]\n[Translation: To those who cling to the feet of Him who has neither desire nor aversion, sorrow shall never come at any time.]`
         ]
       },
       {
-        title: 'Chapter 2: வான்சிறப்பு (The Excellence of Rain)',
+        title: 'அத்தியாயம் 2: வான்சிறப்பு (Excellence of Rain)',
         pages: [
           `வானின்று உலகம் வழங்கி வருதலால்\nதான்அமிழ்தம் என்றுணரற் பாற்று.\n\n[Transliteration: Vaanintru ulagam vazhangi varuthalaal thaanamizhdham endrunarar paatru]\n[Translation: Because rain sustains the world in its regular course, it is regarded as true nectar.]\n\nதுப்பார்க்குத் துப்பாய துப்பாக்கித் துப்பார்க்குத்\nதுப்பாய தூஉம் மழை.\n\n[Transliteration: Thuppaarkkuth thuppaaya thuppaakkith thuppaarkkuth thuppaaya thooumazhai]\n[Translation: Rain creates wholesome food for those who eat, and itself becomes pure water to drink.]`
         ]
       },
       {
-        title: 'Chapter 3: அறன் வலியுறுத்தல் (Assertion of Virtue)',
+        title: 'அத்தியாயம் 3: அறன் வலியுறுத்தல் (Virtue)',
         pages: [
           `மனத்துக்கண் மாசிலன் ஆதல் அனைத்தறன்\nஆகுல நீர பிற.\n\n[Transliteration: Manathukkan maasilan aadhal anaiththaran aagula neera pira]\n[Translation: Purity in mind is the essence of all virtue; all else is mere noisy show.]`
+        ]
+      }
+    ]
+  },
+  {
+    title: 'பாரதியார் கவிதைகள் (Mahakavi Bharathiyar Poems)',
+    author: 'Subramania Bharathi (சுப்பிரமணிய பாரதியார்)',
+    filePath: 'sample_bharathiyar',
+    fileType: 'SAMPLE',
+    language: 'ta',
+    lastReadPageIndex: 0,
+    totalPages: 3,
+    coverBg: 'from-orange-600 to-red-800',
+    description: 'Inspiring patriotic and freedom-loving poems by Tamil poet Mahakavi Subramania Bharathi.',
+    category: 'Tamil Classics',
+    chapters: [
+      {
+        title: 'பாடல் 1: அச்சமில்லை (Fearlessness)',
+        pages: [
+          `அச்சமில்லை அச்சமில்லை அச்சமென்ப தில்லையே\nஇச்சகத்து ளோரெல்லாம் எதிர்த்து நின்ற போதினும்,\nஅச்சமில்லை அச்சமில்லை அச்சமென்ப தில்லையே!\n\n[Transliteration: Achamillai achamillai achamennpadhu illaiyae! Ichagathuloarellaam edhirthu nindra poadhinum, achamillai achamillai achamennpadhu illaiyae!]\n[Translation: Fear we not, fear we not, fear we have none at all! Even if all the people in this world stand against us, fear we have none at all!]`,
+          `உச்சிமீது வானிடிந்து வீழுகின்ற போதினும்,\nஅச்சமில்லை அச்சமில்லை அச்சமென்ப தில்லையே!\n\n[Transliteration: Uchimheedhu vaanidindhu veezhugindra poadhinum, achamillai achamillai achamennpadhu illaiyae!]\n[Translation: Even if the sky breaks and falls upon our heads, fear we not, fear we have none at all!]`
+        ]
+      },
+      {
+        title: 'பாடல் 2: ஓடி விளையாடு பாப்பா (Childrens Song)',
+        pages: [
+          `ஓடி விளையாடு பாப்பா - நீ\nஓய்ந்திருக்க லாகாது பாப்பா,\nகூடி விளையாடு பாப்பா - ஒரு\nகுழந்தையை வையாதே பாப்பா.\n\n[Transliteration: Odi vilaiyaadu paappa - nee oayndhirukka laagaadhu paappa, koodi vilaiyaadu paappa - oru kuzhandhaiyai vaiyaadhae paappa.]\n[Translation: Run and play, dear child - you must not stay idle. Play together in groups, dear child - never scold or hurt another child.]`
         ]
       }
     ]

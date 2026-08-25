@@ -18,8 +18,9 @@ async function startServer() {
         return res.json({ translation: fallbackTranslation(text, sourceLang, targetLang) });
       }
       const ai = new GoogleGenAI({ apiKey });
-      const prompt = `Translate the following text accurately from ${sourceLang} to ${targetLang} for a language learner. Provide only the clean translation output without conversational intro:\n\n"${text}"`;
-      const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: prompt });
+      const targetLanguageName = targetLang === 'ta' ? 'Tamil (தமிழ்)' : targetLang === 'en' ? 'English' : targetLang;
+      const prompt = `Translate the following text accurately into ${targetLanguageName}. Provide only the natural, high quality translated text without any conversational preamble or markdown quote markers:\n\n${text}`;
+      const response = await ai.models.generateContent({ model: "gemini-3.6-flash", contents: prompt });
       const translation = response.text?.trim() || fallbackTranslation(text, sourceLang, targetLang);
       res.json({ translation });
     } catch (error) {
@@ -37,8 +38,9 @@ async function startServer() {
         return res.json({ translations: fallbacks });
       }
       const ai = new GoogleGenAI({ apiKey });
-      const prompt = `Translate each paragraph below into ${targetLang} for a dual-language ebook reader. Output JSON array of string translations matching order:\n\n${JSON.stringify(paragraphs)}`;
-      const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: prompt });
+      const targetLanguageName = targetLang === 'ta' ? 'Tamil (தமிழ்)' : targetLang === 'en' ? 'English' : targetLang;
+      const prompt = `You are an expert literary translator. Translate each paragraph in the JSON array below accurately into ${targetLanguageName}. Maintain paragraph alignment. Return ONLY a valid JSON array of string translations matching the exact length and order of the input array without any explanations:\n\n${JSON.stringify(paragraphs)}`;
+      const response = await ai.models.generateContent({ model: "gemini-3.6-flash", contents: prompt });
       let jsonText = (response.text || "").replace(/```json/g, "").replace(/```/g, "").trim();
       const translations = JSON.parse(jsonText);
       res.json({ translations: Array.isArray(translations) ? translations : paragraphs.map((p: string) => fallbackTranslation(p, sourceLang, targetLang)) });
@@ -57,8 +59,8 @@ async function startServer() {
         return res.json({ transliteration: fallbackTransliteration(text) });
       }
       const ai = new GoogleGenAI({ apiKey });
-      const prompt = `Provide clear Romanized phonetic script / transliteration for natural pronunciation of this ${language} text so a non-native reader can pronounce it naturally. Output ONLY the phonetic pronunciation string:\n\n"${text}"`;
-      const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: prompt });
+      const prompt = `Provide clear Romanized phonetic script (Tanglish / Roman Tamil if Tamil text) for natural pronunciation of this ${language} text so an English speaker or non-native reader can pronounce it naturally. Output ONLY the phonetic pronunciation string without quotes:\n\n"${text}"`;
+      const response = await ai.models.generateContent({ model: "gemini-3.6-flash", contents: prompt });
       res.json({ transliteration: response.text?.trim() || fallbackTransliteration(text) });
     } catch (error) {
       console.error("Transliteration error:", error);
@@ -82,7 +84,7 @@ Provide response in JSON format with exact keys:
 "definition": string,
 "exampleSentence": string,
 "pronunciationTip": string`;
-      const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: prompt });
+      const response = await ai.models.generateContent({ model: "gemini-3.6-flash", contents: prompt });
       let text = response.text || "{}";
       text = text.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(text);
@@ -110,7 +112,7 @@ Provide response in JSON format with exact keys:
       }
       const ai = new GoogleGenAI({ apiKey });
       const prompt = `You are a multilingual AI reading tutor specializing in Tamil, English, French, and literature education. Answer the student's question clearly with examples, grammar tips, and natural pronunciation advice.\n\nPassage:\n"${passage}"\n\nStudent Question:\n"${userQuestion}"`;
-      const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: prompt });
+      const response = await ai.models.generateContent({ model: "gemini-3.6-flash", contents: prompt });
       res.json({ answer: response.text?.trim() || "Tutor: This section provides key literary and language context." });
     } catch (error) {
       console.error("Tutor error:", error);
@@ -138,7 +140,7 @@ User query: "${query}" (Search mode: ${mode}).
 Provide a well-structured, clear response with real-world facts. If relevant to books, include book title, author, description, and key excerpt so the user can add it to their reader library.`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.6-flash",
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }]
