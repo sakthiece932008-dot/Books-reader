@@ -1,21 +1,24 @@
 {
-  "name": "polyglot-reader",
+  "name": "cleartext-reader",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "start": "node dist/server.cjs"
+    "start": "node dist/server.cjs",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
     "@capacitor/core": "^8.5.0",
     "@google/genai": "^2.13.0",
+    "@types/nodemailer": "^8.0.1",
     "clsx": "^2.1.1",
     "express": "^4.21.0",
     "localforage": "^1.10.0",
     "lucide-react": "^0.453.0",
     "motion": "^11.11.1",
+    "nodemailer": "^9.0.5",
     "pdfjs-dist": "^6.2.108",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

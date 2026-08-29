@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Book as BookIcon, Globe, Upload, X, Clock, Trash2, BookOpen, Sparkles, Filter, ChevronRight } from 'lucide-react';
+import { Search, Book as BookIcon, Globe, Upload, X, Trash2, BookOpen, Sparkles, Filter, ChevronRight } from 'lucide-react';
 import { db } from '../lib/db';
 import { BookEntity } from '../types';
 import { initialSampleBooks } from '../data/sampleBooks';
 import { parseUploadedFile } from '../lib/fileParser';
+import { useNetwork } from '../context/NetworkContext';
 
 export default function LibraryScreen() {
   const [books, setBooks] = useState<BookEntity[]>([]);
@@ -12,15 +13,42 @@ export default function LibraryScreen() {
   const [selectedFilter, setSelectedFilter] = useState('All');
   const [sortBy, setSortBy] = useState<'recent' | 'title' | 'progress'>('recent');
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('Processing file...');
+  const [bookToDelete, setBookToDelete] = useState<BookEntity | null>(null);
+  const [showClearDemoConfirm, setShowClearDemoConfirm] = useState(false);
   const navigate = useNavigate();
+  const { showErrorToast, showSuccessToast } = useNetwork();
 
   useEffect(() => {
     loadBooks();
   }, []);
 
   async function loadBooks() {
-    let storedBooks = await db.getBooks();
-    if (storedBooks.length === 0) {
+    try {
+      const isInitialized = localStorage.getItem('books_initialized');
+      let storedBooks = await db.getBooks();
+      
+      // Seed initial sample books only once on first run
+      if (storedBooks.length === 0 && !isInitialized) {
+        for (const b of initialSampleBooks) {
+          await db.saveBook({ 
+            ...b, 
+            id: Date.now() + Math.floor(Math.random() * 100000), 
+            addedTimestamp: Date.now() 
+          });
+        }
+        localStorage.setItem('books_initialized', 'true');
+        storedBooks = await db.getBooks();
+      }
+      setBooks(storedBooks);
+    } catch (err: any) {
+      console.error("Failed to load library books:", err);
+      showErrorToast("Could not load your local library database. Please refresh the page.", "Library Error");
+    }
+  }
+
+  async function restoreSampleBooks() {
+    try {
       for (const b of initialSampleBooks) {
         await db.saveBook({ 
           ...b, 
@@ -28,27 +56,47 @@ export default function LibraryScreen() {
           addedTimestamp: Date.now() 
         });
       }
-      storedBooks = await db.getBooks();
+      localStorage.setItem('books_initialized', 'true');
+      const updated = await db.getBooks();
+      setBooks(updated);
+      showSuccessToast("Classic demo library restored successfully.", "Library Updated");
+    } catch (err: any) {
+      showErrorToast("Failed to restore sample books.", "Operation Failed");
     }
-    setBooks(storedBooks);
   }
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Check file size limit (e.g. 50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      showErrorToast("File is too large (over 50MB). Please select a smaller document.", "Upload Error");
+      e.target.value = '';
+      return;
+    }
+
     setIsUploading(true);
+    setUploadStatus('Reading file bytes...');
 
     try {
-      const parsed = await parseUploadedFile(file);
+      const parsed = await parseUploadedFile(file, (msg) => {
+        setUploadStatus(msg);
+      });
+
+      if (!parsed.fullContent || parsed.fullContent.trim().length === 0) {
+        throw new Error("No readable text found in this file. Please ensure it contains readable text.");
+      }
+
       const newBook: BookEntity = {
         id: Date.now(),
-        title: parsed.title,
+        title: parsed.title || file.name.replace(/\.[^/.]+$/, ''),
         author: 'User Import',
         filePath: file.name,
         fileType: parsed.fileType,
-        language: 'en',
+        language: parsed.language || 'en',
         lastReadPageIndex: 0,
-        totalPages: parsed.totalPages,
+        totalPages: Math.max(1, parsed.totalPages),
         coverBg: 'from-purple-700 to-indigo-900',
         description: `Uploaded file (${parsed.fileType}) • ${parsed.totalPages} page(s)`,
         addedTimestamp: Date.now(),
@@ -57,34 +105,50 @@ export default function LibraryScreen() {
         fullContent: parsed.fullContent
       };
       await db.saveBook(newBook);
+      localStorage.setItem('books_initialized', 'true');
       await loadBooks();
+      showSuccessToast(`"${newBook.title}" imported successfully!`, "Book Added");
       // Auto open uploaded book
       navigate(`/reader/${newBook.id}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Upload error:", err);
+      showErrorToast(err?.message || "Failed to process document. Please check the file format (PDF, TXT, EPUB).", "Import Failed");
     } finally {
       setIsUploading(false);
+      e.target.value = '';
     }
   }
 
-  async function deleteBook(id: number, e: React.MouseEvent) {
-    e.stopPropagation();
-    if (confirm("Remove this book from your library?")) {
-      await db.deleteBook(id);
-      loadBooks();
+  async function handleConfirmDeleteBook() {
+    if (!bookToDelete) return;
+    try {
+      await db.deleteBook(bookToDelete.id);
+      localStorage.setItem('books_initialized', 'true');
+      setBooks(prev => prev.filter(b => b.id !== bookToDelete.id));
+      showSuccessToast(`"${bookToDelete.title}" removed from library.`, "Book Deleted");
+      setBookToDelete(null);
+    } catch (err: any) {
+      console.error("Delete error:", err);
+      showErrorToast("Could not delete book from storage.", "Delete Failed");
     }
   }
 
-  async function clearDemoBooks() {
-    if (confirm("Remove sample/demo books from your library?")) {
+  async function handleConfirmClearDemoBooks() {
+    try {
       const all = await db.getBooks();
       for (const b of all) {
         if (b.fileType === 'SAMPLE') {
           await db.deleteBook(b.id);
         }
       }
+      localStorage.setItem('books_initialized', 'true');
       const updated = await db.getBooks();
       setBooks(updated);
+      setShowClearDemoConfirm(false);
+      showSuccessToast("Demo books cleared.", "Library Updated");
+    } catch (err) {
+      console.error("Clear demo error:", err);
+      showErrorToast("Failed to remove sample books.", "Operation Failed");
     }
   }
 
@@ -134,7 +198,7 @@ export default function LibraryScreen() {
               <BookOpen className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="font-bold text-lg leading-none tracking-tight">PolyGlot Kindle</h1>
+              <h1 className="font-bold text-lg leading-none tracking-tight">ClearText Reader</h1>
               <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Multilingual Reader</p>
             </div>
           </div>
@@ -183,8 +247,13 @@ export default function LibraryScreen() {
 
             {books.some(b => b.fileType === 'SAMPLE') && (
               <button
-                onClick={clearDemoBooks}
-                title="Remove demo books"
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setShowClearDemoConfirm(true);
+                }}
+                title="Remove sample/demo books"
                 className="p-2.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors shrink-0"
               >
                 <Trash2 className="w-4 h-4" />
@@ -282,20 +351,31 @@ export default function LibraryScreen() {
                 {searchQuery ? `No titles or authors match "${searchQuery}". Try a different keyword.` : `No books in category "${selectedFilter}".`}
               </p>
             </div>
-            {searchQuery ? (
-              <button 
-                onClick={() => setSearchQuery('')}
-                className="px-4 py-2 rounded-xl bg-gray-100 dark:bg-gray-800 text-xs font-semibold hover:bg-gray-200"
-              >
-                Clear Search
-              </button>
-            ) : (
-              <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--primary)] text-white text-xs font-semibold">
-                <Upload className="w-4 h-4" />
-                Upload New Book
-                <input type="file" className="hidden" accept=".pdf,.epub,.txt" onChange={handleFileUpload} />
-              </label>
-            )}
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              {searchQuery ? (
+                <button 
+                  onClick={() => setSearchQuery('')}
+                  className="px-4 py-2 rounded-xl bg-gray-100 dark:bg-gray-800 text-xs font-semibold hover:bg-gray-200"
+                >
+                  Clear Search
+                </button>
+              ) : (
+                <>
+                  <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[var(--primary)] text-white text-xs font-semibold hover:opacity-90 shadow-sm">
+                    <Upload className="w-4 h-4" />
+                    Upload Book
+                    <input type="file" className="hidden" accept=".pdf,.epub,.txt" onChange={handleFileUpload} />
+                  </label>
+                  <button
+                    onClick={restoreSampleBooks}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    Restore Sample Books
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -329,9 +409,14 @@ export default function LibraryScreen() {
                           {book.title}
                         </h3>
                         <button 
-                          onClick={(e) => deleteBook(book.id, e)}
-                          className="text-gray-400 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="Remove book"
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setBookToDelete(book);
+                          }}
+                          className="p-1 rounded-lg text-gray-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/50 transition-colors shrink-0"
+                          title="Remove book from library"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -360,6 +445,106 @@ export default function LibraryScreen() {
           </div>
         )}
       </div>
+
+      {/* PDF Uploading & Processing Indicator Modal */}
+      {isUploading && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-gray-900 border border-[var(--border)] rounded-3xl shadow-2xl p-6 space-y-4 text-center animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center border border-indigo-100 dark:border-indigo-900 shadow-inner">
+              <Sparkles className="w-7 h-7 animate-spin" style={{ animationDuration: '3s' }} />
+            </div>
+            <div>
+              <h3 className="font-bold text-base text-gray-900 dark:text-white">Importing Document</h3>
+              <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium mt-1">
+                {uploadStatus}
+              </p>
+              <p className="text-[11px] text-gray-400 mt-2">
+                Extracting and formatting text for offline reading...
+              </p>
+            </div>
+            <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
+              <div className="bg-indigo-600 h-1.5 rounded-full w-2/3 animate-pulse"></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Single Book Deletion */}
+      {bookToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-gray-900 border border-[var(--border)] rounded-2xl shadow-2xl p-5 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-gray-900 dark:text-white">Remove Book</h3>
+                <p className="text-xs text-gray-500">Are you sure you want to remove this book?</p>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl border border-gray-100 dark:border-gray-800">
+              <p className="text-xs font-bold text-gray-800 dark:text-gray-200 line-clamp-2">{bookToDelete.title}</p>
+              <p className="text-[11px] text-gray-500">{bookToDelete.author}</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setBookToDelete(null)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteBook}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white shadow-xs transition-colors"
+              >
+                Delete Book
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Clearing Demo Books */}
+      {showClearDemoConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-gray-900 border border-[var(--border)] rounded-2xl shadow-2xl p-5 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-gray-900 dark:text-white">Remove Demo Books</h3>
+                <p className="text-xs text-gray-500">Remove all built-in sample books from your library?</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
+              This will clean out sample literature and leave only your imported and web-saved books. You can restore sample books at any time.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearDemoConfirm(false)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClearDemoBooks}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white shadow-xs transition-colors"
+              >
+                Remove Samples
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
