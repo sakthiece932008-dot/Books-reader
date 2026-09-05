@@ -300,19 +300,107 @@ export class TamilPhoneticNLP {
   }
 
   /**
-   * Phonetic Romanized transliteration (Tanglish) for learners and non-native readers
+   * Phonetic Romanized transliteration (Tanglish / Romanized Hindi / Latin) for learners and non-native readers
    */
   public static transliterateToLatin(text: string): string {
     if (!text) return "";
-    const map: Record<string, string> = {
-      'அ': 'a', 'ஆ': 'aa', 'இ': 'i', 'ஈ': 'ee', 'உ': 'u', 'ஊ': 'oo',
-      'எ': 'e', 'ஏ': 'ae', 'ஐ': 'ai', 'ஒ': 'o', 'ஓ': 'oa', 'ஔ': 'au', 'ஃ': 'ak',
-      'க': 'ka', 'ங': 'nga', 'ச': 'cha', 'ஞ': 'nya', 'ட': 'ta', 'ண': 'na',
-      'த': 'tha', 'ந': 'na', 'ப': 'pa', 'ம': 'ma', 'ய': 'ya', 'ர': 'ra',
-      'ல': 'la', 'வ': 'va', 'ழ': 'zha', 'ள': 'la', 'ற': 'ra', 'ன': 'na',
-      'ா': 'aa', 'ி': 'i', 'ீ': 'ee', 'ு': 'u', 'ூ': 'oo', 'ெ': 'e',
-      'ே': 'ae', 'ை': 'ai', 'ொ': 'o', 'ோ': 'oa', 'ௌ': 'au', '்': ''
-    };
-    return text.split('').map(c => map[c] !== undefined ? map[c] : c).join('');
+
+    // 1. Devanagari (Hindi, Sanskrit, Marathi)
+    if (/[\u0900-\u097F]/.test(text)) {
+      const devVowels: Record<string, string> = {
+        'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
+        'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'am', 'अः': 'ah'
+      };
+      const devMatras: Record<string, string> = {
+        'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri',
+        'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n', 'ँ': 'n', 'ः': 'h', '्': ''
+      };
+      const devConsonants: Record<string, string> = {
+        'क': 'ka', 'ख': 'kha', 'ग': 'ga', 'घ': 'gha', 'ङ': 'nga',
+        'च': 'cha', 'छ': 'chha', 'ज': 'ja', 'झ': 'jha', 'ञ': 'nya',
+        'ट': 'ta', 'ठ': 'tha', 'ड': 'da', 'ढ': 'dha', 'ण': 'na',
+        'त': 'ta', 'थ': 'tha', 'द': 'da', 'ध': 'dha', 'न': 'na',
+        'प': 'pa', 'फ': 'pha', 'ब': 'ba', 'भ': 'bha', 'म': 'ma',
+        'य': 'ya', 'ர': 'ra', 'र': 'ra', 'ल': 'la', 'व': 'va',
+        'श': 'sha', 'ष': 'sha', 'स': 'sa', 'ह': 'ha',
+        'क्ष': 'ksha', 'त्र': 'tra', 'ज्ञ': 'gya',
+        'ड़': 'da', 'ढ़': 'dha', 'ज़': 'za', 'फ़': 'fa', 'क़': 'qa', 'ख़': 'kha', 'ग़': 'gha'
+      };
+
+      let result = '';
+      const chars = Array.from(text);
+      for (let i = 0; i < chars.length; i++) {
+        const c = chars[i];
+        const next = chars[i + 1];
+
+        if (devVowels[c]) {
+          result += devVowels[c];
+        } else if (devConsonants[c]) {
+          const base = devConsonants[c];
+          if (next && devMatras[next] !== undefined) {
+            result += base.slice(0, -1) + devMatras[next];
+            i++;
+          } else if (next === '्') {
+            result += base.slice(0, -1);
+            i++;
+          } else {
+            const isWordEnd = !next || /[\s\p{P}]/u.test(next);
+            result += isWordEnd ? base.slice(0, -1) : base;
+          }
+        } else if (devMatras[c]) {
+          result += devMatras[c];
+        } else {
+          result += c;
+        }
+      }
+      return result;
+    }
+
+    // 2. Tamil
+    if (/[\u0B80-\u0BFF]/.test(text)) {
+      const taVowels: Record<string, string> = {
+        'அ': 'a', 'ஆ': 'aa', 'இ': 'i', 'ஈ': 'ee', 'உ': 'u', 'ஊ': 'oo',
+        'எ': 'e', 'ஏ': 'ae', 'ஐ': 'ai', 'ஒ': 'o', 'ஓ': 'oa', 'ஔ': 'au', 'ஃ': 'ah'
+      };
+      const taMatras: Record<string, string> = {
+        'ா': 'aa', 'ி': 'i', 'ீ': 'ee', 'ு': 'u', 'ூ': 'oo',
+        'ெ': 'e', 'ே': 'ae', 'ை': 'ai', 'ொ': 'o', 'ோ': 'oa', 'ௌ': 'au', '்': ''
+      };
+      const taConsonants: Record<string, string> = {
+        'க': 'ka', 'ங': 'nga', 'ச': 'cha', 'ஞ': 'nya', 'ட': 'ta', 'ண': 'na',
+        'த': 'tha', 'ந': 'na', 'ப': 'pa', 'ம': 'ma', 'ய': 'ya', 'ர': 'ra',
+        'ல': 'la', 'வ': 'va', 'ழ': 'zha', 'ள': 'la', 'ற': 'ra', 'ன': 'na',
+        'ஜ': 'ja', 'ஷ': 'sha', 'ஸ': 'sa', 'ஹ': 'ha', 'க்ஷ': 'ksha'
+      };
+
+      let result = '';
+      const chars = Array.from(text);
+      for (let i = 0; i < chars.length; i++) {
+        const c = chars[i];
+        const next = chars[i + 1];
+
+        if (taVowels[c]) {
+          result += taVowels[c];
+        } else if (taConsonants[c]) {
+          const base = taConsonants[c];
+          if (next && taMatras[next] !== undefined) {
+            result += base.slice(0, -1) + taMatras[next];
+            i++;
+          } else if (next === '்') {
+            result += base.slice(0, -1);
+            i++;
+          } else {
+            result += base;
+          }
+        } else if (taMatras[c]) {
+          result += taMatras[c];
+        } else {
+          result += c;
+        }
+      }
+      return result;
+    }
+
+    return text;
   }
 }

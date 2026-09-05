@@ -58,6 +58,7 @@ export default function ReaderScreen() {
   const [targetLanguage, setTargetLanguage] = useState<string>('en');
   const [liveTranslations, setLiveTranslations] = useState<Record<number, string[]>>({});
   const [liveTransliterations, setLiveTransliterations] = useState<Record<number, string[]>>({});
+  const [liveTargetTransliterations, setLiveTargetTransliterations] = useState<Record<number, string[]>>({});
   const [isTranslatingPage, setIsTranslatingPage] = useState(false);
   const [translationError, setTranslationError] = useState<string | null>(null);
   const [autoTranslateEnabled, setAutoTranslateEnabled] = useState(false);
@@ -307,17 +308,44 @@ export default function ReaderScreen() {
         [pageIdx]: finalTranslations
       }));
 
-      // 2. Fetch Romanized Transliteration if source or target is an Indian / Asian script
-      const needsTransliteration = ['ta', 'hi', 'te', 'ml', 'kn', 'bn', 'mr', 'gu', 'pa', 'ja', 'zh', 'ar', 'ru'].includes(activeSource) || ['ta', 'hi'].includes(activeTarget);
-      if (needsTransliteration) {
+      // 2. Fetch Romanized Transliteration for Source (e.g. Hindi Romanization)
+      const sourceNeedsTranslit = ['ta', 'hi', 'te', 'ml', 'kn', 'bn', 'mr', 'gu', 'pa', 'ja', 'zh', 'ar', 'ru'].includes(activeSource);
+      if (sourceNeedsTranslit) {
         const translitPromises = paras.map(async (p, idx) => {
           if (embTranslits[idx]) return embTranslits[idx];
-          return await api.transliterate(p, getLanguageName(activeSource));
+          if (activeSource === 'ta') return TamilPhoneticNLP.transliterateToLatin(p);
+          try {
+            const apiRes = await api.transliterate(p, getLanguageName(activeSource));
+            if (apiRes && apiRes.trim().length > 0) return apiRes;
+          } catch {}
+          return '';
         });
         const translits = await Promise.all(translitPromises);
         setLiveTransliterations(prev => ({
           ...prev,
           [pageIdx]: translits
+        }));
+      }
+
+      // 3. Fetch Romanized Transliteration for Target Translation (e.g. Tanglish for Tamil)
+      const targetNeedsTranslit = ['ta', 'hi', 'te', 'ml', 'kn', 'bn', 'mr', 'gu', 'pa', 'ja', 'zh', 'ar', 'ru'].includes(activeTarget);
+      if (targetNeedsTranslit) {
+        const targetTranslitPromises = finalTranslations.map(async (t) => {
+          if (!t) return '';
+          // For Tamil target, use native TamilPhoneticNLP for instant, pure Tanglish
+          if (activeTarget === 'ta') {
+            return TamilPhoneticNLP.transliterateToLatin(t);
+          }
+          try {
+            const apiRes = await api.transliterate(t, getLanguageName(activeTarget));
+            if (apiRes && apiRes.trim().length > 0) return apiRes;
+          } catch {}
+          return '';
+        });
+        const targetTranslits = await Promise.all(targetTranslitPromises);
+        setLiveTargetTransliterations(prev => ({
+          ...prev,
+          [pageIdx]: targetTranslits
         }));
       }
     } catch (e: any) {
@@ -1044,32 +1072,32 @@ export default function ReaderScreen() {
     switch (textColor) {
       case 'black': return 'text-black font-semibold';
       case 'charcoal': return 'text-zinc-950 dark:text-zinc-50 font-medium';
-      case 'espresso': return 'text-[#29180E] dark:text-[#F7F0E6] font-medium';
-      case 'navy': return 'text-[#0F172A] dark:text-[#E2E8F0] font-medium';
+      case 'espresso': return 'text-[#1c130d] dark:text-[#F7F0E6] font-medium';
+      case 'navy': return 'text-[#0a101d] dark:text-[#E2E8F0] font-medium';
       case 'white': return 'text-white font-semibold';
       case 'cream': return 'text-[#FFFBEB] font-medium';
       case 'auto':
       default:
-        return '';
+        return 'text-zinc-950 dark:text-zinc-100';
     }
   };
 
   // Theme Styling
   const getThemeClasses = () => {
-    let themeBg = 'bg-[#FDFDF9] text-[#111827]';
+    let themeBg = 'bg-[#FDFDF9] text-[#09090b]';
     switch (theme) {
       case 'sepia':
-        themeBg = 'bg-[#F5EBE1] text-[#29180E]';
+        themeBg = 'bg-[#F5EBE1] text-[#1c130d]';
         break;
       case 'dark':
         themeBg = 'bg-[#121212] text-[#F9FAFB]';
         break;
       case 'mint':
-        themeBg = 'bg-[#EBF3ED] text-[#064E3B]';
+        themeBg = 'bg-[#EBF3ED] text-[#022c22]';
         break;
       case 'paper':
       default:
-        themeBg = 'bg-[#FDFDF9] text-[#111827]';
+        themeBg = 'bg-[#FDFDF9] text-[#09090b]';
         break;
     }
     const customText = getTextColorClasses();
@@ -1091,6 +1119,7 @@ export default function ReaderScreen() {
 
   const currentTranslations = liveTranslations[currentPageIndex] || [];
   const currentTransliterations = liveTransliterations[currentPageIndex] || [];
+  const currentTargetTransliterations = liveTargetTransliterations[currentPageIndex] || [];
 
   if (bookNotFound) {
     return (
@@ -1307,7 +1336,8 @@ export default function ReaderScreen() {
 
               {cleanParagraphs.map((para, idx) => {
                 const trans = currentTranslations[idx] || embeddedTranslations[idx] || "";
-                const translit = currentTransliterations[idx] || embeddedTransliterations[idx] || "";
+                const sourceTranslit = currentTransliterations[idx] || embeddedTransliterations[idx] || "";
+                const targetTranslit = currentTargetTransliterations[idx] || (targetLanguage === 'ta' && trans ? TamilPhoneticNLP.transliterateToLatin(trans) : "");
                 const isSpeakingThis = speakingParagraphIdx === idx;
                 const paraLang = detectScriptLanguage(para, sourceLanguage);
 
@@ -1316,7 +1346,7 @@ export default function ReaderScreen() {
                     key={idx} 
                     id={`para-${idx}`}
                     onClick={() => playFromParagraph(idx)}
-                    className={`group space-y-2.5 pb-4 border-b border-black/5 dark:border-white/5 transition-all p-3 rounded-xl cursor-pointer ${
+                    className={`group space-y-3 pb-4 border-b border-black/10 dark:border-white/10 transition-all p-3.5 rounded-xl cursor-pointer ${
                       isSpeakingThis ? 'bg-amber-500/15 border-l-4 border-amber-600 shadow-xs' : 'hover:bg-black/5 dark:hover:bg-white/5'
                     }`}
                   >
@@ -1330,28 +1360,41 @@ export default function ReaderScreen() {
                         </span>
                       )}
                       <div className="flex-1">
-                        <span className="text-[10px] uppercase tracking-wider font-mono opacity-70 block mb-0.5 font-bold">
+                        <span className="text-[11px] uppercase tracking-wider font-mono text-zinc-700 dark:text-zinc-300 block mb-0.5 font-bold">
                           {getLanguageName(paraLang)}
                         </span>
-                        <p>{renderHighlightedText(para, isSpeakingThis && speechReadTarget === 'original')}</p>
+                        <p className="text-zinc-950 dark:text-zinc-50 font-normal leading-relaxed text-base">
+                          {renderHighlightedText(para, isSpeakingThis && speechReadTarget === 'original')}
+                        </p>
+
+                        {/* Source Romanized Phonetic Pronunciation (e.g. Romanized Hindi for Hindi text) */}
+                        {sourceTranslit && sourceTranslit.trim() !== para.trim() && (
+                          <div className="mt-1.5">
+                            <span className="text-[11px] font-mono font-medium text-zinc-900 dark:text-zinc-100 bg-zinc-200/80 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700 px-2.5 py-0.5 rounded-md inline-block">
+                              Pronunciation ({getLanguageName(paraLang)}): {sourceTranslit}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                     
                     {/* Live Parallel Translation in Target Language */}
                     {trans && (
-                      <div className="pl-6 border-l-2 border-amber-600/60 dark:border-amber-500/60 text-sm font-sans space-y-1.5 ml-2">
-                        <span className="text-[10px] uppercase tracking-wider font-mono text-amber-700 dark:text-amber-400 font-bold block">
-                          {getLanguageName(targetLanguage)} Translation
-                        </span>
-                        <p className="text-amber-900 dark:text-amber-200 leading-relaxed font-medium">
+                      <div className="pl-6 border-l-2 border-amber-600 dark:border-amber-400 text-sm font-sans space-y-2 ml-2 mt-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] uppercase tracking-wider font-mono text-amber-950 dark:text-amber-200 bg-amber-200/80 dark:bg-amber-950/80 border border-amber-400/60 dark:border-amber-700 font-bold px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-2xs">
+                            {getLanguageName(targetLanguage)} Translation
+                          </span>
+                        </div>
+                        <p className="text-zinc-950 dark:text-zinc-100 text-[15px] sm:text-base leading-relaxed font-medium">
                           {renderHighlightedText(trans, isSpeakingThis && speechReadTarget === 'translated')}
                         </p>
                         
-                        {/* Romanized Phonetic Transliteration (Tanglish / Romaji / etc.) */}
-                        {(readingMode === 'interlinear' || translit) && translit && (
-                          <div className="mt-1">
-                            <span className="text-[10px] font-mono text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2.5 py-1 rounded-md inline-block">
-                              Phonetic: {translit}
+                        {/* Target Romanized Phonetic Transliteration (e.g. Tanglish for Tamil) */}
+                        {targetTranslit && targetTranslit.trim() !== trans.trim() && (
+                          <div className="mt-1.5">
+                            <span className="text-[11px] font-mono font-medium text-indigo-950 dark:text-indigo-100 bg-indigo-100/90 dark:bg-indigo-950/80 border border-indigo-300 dark:border-indigo-800 px-2.5 py-0.5 rounded-md inline-block">
+                              Phonetic ({targetLanguage === 'ta' ? 'Tanglish' : getLanguageName(targetLanguage)}): {targetTranslit}
                             </span>
                           </div>
                         )}

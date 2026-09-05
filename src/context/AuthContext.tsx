@@ -53,8 +53,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (saved) {
         setUser(JSON.parse(saved));
       } else {
-        // Prompt login on fresh session
-        setShowLoginModal(true);
+        const guestUser: User = {
+          email: 'guest@cleartext.local',
+          name: 'Guest Reader',
+          verified: true,
+          authProvider: 'guest'
+        };
+        setUser(guestUser);
+        setShowLoginModal(false);
       }
 
       const pendingOtp = sessionStorage.getItem(OTP_STORAGE_KEY);

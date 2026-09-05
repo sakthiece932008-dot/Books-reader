@@ -271,7 +271,7 @@ export default function LibraryScreen() {
               <Sparkles className="w-3 h-3" /> Live Gemini Translation
             </span>
             <h2 className="text-2xl font-extrabold tracking-tight">Kindle Reader for Tamil & Classics</h2>
-            <p className="text-xs text-gray-300 leading-relaxed">
+            <p className="text-sm text-white/95 leading-relaxed font-medium">
               Read books with line-by-line parallel translations, Romanized phonetics, and instant word lookup. Supports PDF, TXT, and classical literature.
             </p>
           </div>
@@ -282,17 +282,17 @@ export default function LibraryScreen() {
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className={`w-12 h-16 rounded-lg bg-gradient-to-br ${recentlyRead.coverBg || 'from-indigo-600 to-purple-800'} flex items-center justify-center text-white shrink-0 shadow-md`}>
-                <BookIcon className="w-6 h-6 opacity-80" />
+                <BookIcon className="w-6 h-6 opacity-90" />
               </div>
               <div>
-                <span className="text-[10px] font-bold text-[var(--primary)] uppercase tracking-wider">Continue Reading</span>
-                <h3 className="font-bold text-base text-[var(--foreground)] line-clamp-1">{recentlyRead.title}</h3>
-                <p className="text-xs text-gray-500">{recentlyRead.author} • Page {recentlyRead.lastReadPageIndex + 1} of {recentlyRead.totalPages}</p>
+                <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Continue Reading</span>
+                <h3 className="font-bold text-base text-zinc-950 dark:text-zinc-100 line-clamp-1">{recentlyRead.title}</h3>
+                <p className="text-xs text-zinc-700 dark:text-zinc-300 font-medium">{recentlyRead.author} • Page {recentlyRead.lastReadPageIndex + 1} of {recentlyRead.totalPages}</p>
               </div>
             </div>
             <button 
               onClick={() => navigate(`/reader/${recentlyRead.id}`)}
-              className="flex items-center gap-1 px-4 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-[var(--primary)] font-semibold text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors w-full sm:w-auto justify-center"
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs transition-colors w-full sm:w-auto justify-center shadow-xs"
             >
               <span>Resume</span>
               <ChevronRight className="w-4 h-4" />

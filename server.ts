@@ -115,17 +115,24 @@ async function startServer() {
     const msg = String(err?.message || err?.status || err || '').toLowerCase();
     return msg.includes('429') || 
            msg.includes('503') || 
+           msg.includes('500') ||
            msg.includes('resource_exhausted') || 
            msg.includes('quota') || 
            msg.includes('rate-limit') ||
            msg.includes('high demand') ||
-           msg.includes('unavailable');
+           msg.includes('unavailable') ||
+           msg.includes('not_found') ||
+           msg.includes('404') ||
+           msg.includes('no longer available');
   };
   const isQuotaError = isQuotaOrDemandError;
 
   // Safe wrapper for Gemini generateContent with automatic retry and model fallback on 503/429 spikes
   const generateWithRetry = async (ai: GoogleGenAI, params: { model?: string; contents: any; config?: any }, retries = 2) => {
-    const modelsToTry = [params.model || "gemini-3.7-flash", "gemini-2.5-flash"];
+    const defaultModel = "gemini-3.7-flash";
+    const requestedModel = params.model || defaultModel;
+    const fallbackList = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.0-flash"];
+    const modelsToTry = [requestedModel, ...fallbackList.filter(m => m !== requestedModel)];
     
     for (const modelCandidate of modelsToTry) {
       for (let attempt = 0; attempt <= retries; attempt++) {
@@ -143,7 +150,7 @@ async function startServer() {
             continue;
           }
           // If all retries on this model failed and we have another modelCandidate, try next model
-          if (modelCandidate === modelsToTry[modelsToTry.length - 1] || !isTransient) {
+          if (modelCandidate === modelsToTry[modelsToTry.length - 1]) {
             throw error;
           }
           break; // break inner loop to try next modelCandidate
@@ -183,18 +190,33 @@ async function startServer() {
   // 1. Text Translation Endpoint (supports all languages)
   app.post("/api/translate", async (req, res) => {
     const { text, sourceLang = "auto", targetLang = "en" } = req.body;
+    if (!text || typeof text !== "string") {
+      return res.json({ translation: "" });
+    }
     const detectedSource = (sourceLang === "auto" || sourceLang === "en") ? detectLanguageFromText(text, sourceLang) : sourceLang;
+    
+    const cacheKey = makeCacheKey("trans", detectedSource, targetLang, text.trim());
+    const cached = aiCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     try {
       const ai = getAI();
       if (!ai) {
-        return res.json({ translation: fallbackTranslation(text, detectedSource, targetLang) });
+        const translation = fallbackTranslation(text, detectedSource, targetLang);
+        return res.json({ translation });
       }
       const targetLanguageName = LANGUAGE_NAMES[targetLang] || targetLang;
       const sourceLanguageName = LANGUAGE_NAMES[detectedSource] || detectedSource;
-      const prompt = `You are a professional literary translator. Translate the following text from ${sourceLanguageName} accurately and naturally into ${targetLanguageName}. Preserve nuances, literary tone, and formatting. Return ONLY the translated text without conversational preamble or markdown quote marks:\n\n${text}`;
+      const prompt = `You are a professional literary translator. Translate the following text from ${sourceLanguageName} accurately and naturally into ${targetLanguageName}. Preserve nuances, literary tone, character voice, and formatting. Return ONLY the translated text without conversational preamble, markdown fences, or quote marks:\n\n${text}`;
       const response = await generateWithRetry(ai, { contents: prompt });
-      const translation = response.text?.trim() || fallbackTranslation(text, detectedSource, targetLang);
-      res.json({ translation });
+      const rawText = response.text?.trim() || "";
+      const translation = rawText ? rawText.replace(/^["']|["']$/g, '').trim() : fallbackTranslation(text, detectedSource, targetLang);
+      
+      const payload = { translation };
+      aiCache.set(cacheKey, payload);
+      res.json(payload);
     } catch (error) {
       if (isQuotaOrDemandError(error)) {
         console.warn("Gemini API high demand / quota reached on /api/translate. Serving fallback translation.");
@@ -208,59 +230,125 @@ async function startServer() {
   // 2. Live Page Paragraph Translation (parallel array matching)
   app.post("/api/translate-live", async (req, res) => {
     const { paragraphs, sourceLang = "auto", targetLang = "en" } = req.body;
-    const sampleText = (paragraphs || []).join(" ");
+    if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
+      return res.json({ translations: [] });
+    }
+
+    const sampleText = paragraphs.join(" ");
     const detectedSource = (sourceLang === "auto" || sourceLang === "en") ? detectLanguageFromText(sampleText, sourceLang) : sourceLang;
+    
+    const cacheKey = makeCacheKey("trans_live", detectedSource, targetLang, JSON.stringify(paragraphs));
+    const cached = aiCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     try {
       const ai = getAI();
-      if (!ai || !Array.isArray(paragraphs) || paragraphs.length === 0) {
-        const fallbacks = (paragraphs || []).map((p: string) => fallbackTranslation(p, detectedSource, targetLang));
+      if (!ai) {
+        const fallbacks = paragraphs.map((p: string) => fallbackTranslation(p, detectedSource, targetLang));
         return res.json({ translations: fallbacks });
       }
 
       const targetLanguageName = LANGUAGE_NAMES[targetLang] || targetLang;
       const sourceLanguageName = LANGUAGE_NAMES[detectedSource] || detectedSource;
-      const prompt = `You are an expert literary translator. Translate each paragraph in the JSON array below from ${sourceLanguageName} accurately and fluently into ${targetLanguageName}. Maintain strict 1-to-1 paragraph alignment. Return ONLY a valid JSON array of strings matching the exact length and order of the input array without markdown fences or additional explanation:\n\n${JSON.stringify(paragraphs)}`;
+      const prompt = `You are an expert literary translator. Translate each paragraph in the JSON array below from ${sourceLanguageName} accurately and fluently into ${targetLanguageName}.
+Maintain strict 1-to-1 paragraph alignment.
+Return a valid JSON array of strings containing the exact translation of each paragraph in the same order.
+Input Array:
+${JSON.stringify(paragraphs)}`;
       
-      const response = await generateWithRetry(ai, { contents: prompt });
-      let jsonText = (response.text || "").replace(/```json/gi, "").replace(/```/g, "").trim();
-      let translations: string[] = [];
-      try {
-        const parsed = JSON.parse(jsonText);
-        if (Array.isArray(parsed)) {
-          translations = parsed;
+      const response = await generateWithRetry(ai, { 
+        contents: prompt,
+        config: { 
+          responseMimeType: "application/json"
         }
-      } catch {
-        // Line-by-line fallback
-        translations = jsonText.split("\n").filter(l => l.trim().length > 0);
+      });
+      
+      let translations: string[] = [];
+      const resText = response.text?.trim() || "";
+      try {
+        const parsed = JSON.parse(resText);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          translations = parsed.map(item => (typeof item === 'string' ? item : String(item)).trim());
+        }
+      } catch (parseErr) {
+        console.warn("Direct JSON parse failed on translate-live, attempting regex extraction:", parseErr);
+        const match = resText.match(/\[[\s\S]*\]/);
+        if (match) {
+          try {
+            const arr = JSON.parse(match[0]);
+            if (Array.isArray(arr)) {
+              translations = arr.map(item => String(item).trim());
+            }
+          } catch {}
+        }
       }
 
-      res.json({ 
-        translations: translations.length === paragraphs.length 
-          ? translations 
-          : paragraphs.map((p: string) => fallbackTranslation(p, detectedSource, targetLang)) 
-      });
+      // If array length matches, use it
+      if (translations.length === paragraphs.length) {
+        const payload = { translations };
+        aiCache.set(cacheKey, payload);
+        return res.json(payload);
+      }
+
+      // Otherwise, attempt individual paragraph translation in parallel
+      const individualTranslations = await Promise.all(
+        paragraphs.map(async (p: string) => {
+          try {
+            const pPrompt = `Translate this ${sourceLanguageName} literary excerpt accurately into natural ${targetLanguageName}. Return ONLY the direct translation:\n\n${p}`;
+            const pRes = await generateWithRetry(ai, { contents: pPrompt });
+            const translated = pRes.text?.trim();
+            return translated && translated.length > 0 ? translated.replace(/^["']|["']$/g, '').trim() : fallbackTranslation(p, detectedSource, targetLang);
+          } catch {
+            return fallbackTranslation(p, detectedSource, targetLang);
+          }
+        })
+      );
+
+      const payload = { translations: individualTranslations };
+      aiCache.set(cacheKey, payload);
+      res.json(payload);
     } catch (error) {
       if (isQuotaOrDemandError(error)) {
         console.warn("Gemini API high demand / quota reached on /api/translate-live. Serving fallback translations.");
       } else {
         console.error("Live translation error:", error);
       }
-      const fallbacks = (paragraphs || []).map((p: string) => fallbackTranslation(p, detectedSource, targetLang));
+      const fallbacks = paragraphs.map((p: string) => fallbackTranslation(p, detectedSource, targetLang));
       res.json({ translations: fallbacks });
     }
   });
 
   // 3. Phonetic Romanized Transliteration (Tanglish / Romaji / Pinyin / etc.)
   app.post("/api/transliterate", async (req, res) => {
-    const { text, language = "Tamil" } = req.body;
+    const { text, language = "auto" } = req.body;
+    if (!text || typeof text !== "string") {
+      return res.json({ transliteration: "" });
+    }
+
+    const detected = language === "auto" ? detectLanguageFromText(text, "ta") : language;
+    const cacheKey = makeCacheKey("translit", detected, text.trim());
+    const cached = aiCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     try {
       const ai = getAI();
       if (!ai) {
-        return res.json({ transliteration: fallbackTransliteration(text) });
+        const transliteration = fallbackTransliteration(text);
+        return res.json({ transliteration });
       }
-      const prompt = `Provide clear, natural Romanized phonetic script (for example, conversational Tanglish for Tamil, Romaji for Japanese, Pinyin for Chinese, or Romanized script for Indian/foreign languages) for this ${language} text so a non-native reader or learner can pronounce it naturally. Output ONLY the phonetic pronunciation string without commentary or quotation marks:\n\n${text}`;
+      const langName = LANGUAGE_NAMES[detected] || detected;
+      const prompt = `Provide clear, natural Romanized phonetic script (for example, conversational Tanglish for Tamil, Romanized Hindi for Devanagari, Romaji for Japanese, Pinyin for Chinese, or Romanized script for foreign languages) for this ${langName} text so a learner can pronounce it naturally and smoothly. Output ONLY the phonetic Romanized string without commentary, introductory labels, or quotation marks:\n\n${text}`;
       const response = await generateWithRetry(ai, { contents: prompt });
-      res.json({ transliteration: response.text?.trim() || fallbackTransliteration(text) });
+      const raw = response.text?.trim() || "";
+      const transliteration = raw ? raw.replace(/^["']|["']$/g, '').trim() : fallbackTransliteration(text);
+      
+      const payload = { transliteration };
+      aiCache.set(cacheKey, payload);
+      res.json(payload);
     } catch (error) {
       if (isQuotaOrDemandError(error)) {
         console.warn("Gemini API high demand / quota reached on /api/transliterate. Using algorithmic transliteration.");
@@ -1065,27 +1153,179 @@ ${text}
   });
 }
 
-function fallbackTranslation(text: string, sourceLang: string, targetLang: string): string {
+function fallbackTranslation(text: string, _sourceLang: string, targetLang: string): string {
     if (!text) return "";
-    if (text.includes("அகர முதல")) return "As the letter 'A' is the first of all letters, so the Primordial God is first in the world.";
-    if (text.includes("கற்றதனால்")) return "What is the benefit of learning if one does not worship the feet of the All-Wise God?";
-    if (text.includes("துப்பார்க்குத்")) return "Rain creates delicious food for eaters, and itself becomes drinkable water.";
-    if (text.includes("Bonjour")) return "Hello and welcome to language learning!";
-    if (text.includes("Lorsque j'avais")) return "When I was six years old I saw a magnificent picture in a book about the primeval forest.";
-    if (targetLang === "ta") return `தமிழ் மொழிபெயர்ப்பு: ${text}`;
-    return `Translation (${sourceLang} -> ${targetLang}): ${text}`;
+    const clean = text.trim();
+
+    // Specific Literary Masterpiece Translations
+    // 1. Premchand - Godaan
+    if (clean.includes("होरी महतो ने दोनों बैलों") || clean.includes("सानी-पानी देकर")) {
+      if (targetLang === "ta") return "ஹோரி மஹதோ இரு மாடுகளுக்கும் தீவனமும் தண்ணீரும் கொடுத்துவிட்டு தன் மனைவி தனியாவிடம் கூறினார்—“கோபரிடம் கொஞ்சம் கவனமாக இருக்கச் சொல், இன்று வயலுக்குத் தண்ணீர் பாய்ச்ச வேண்டும். நான் ராய்சாஹிப் வீட்டிற்குப் போகிறேன்.”";
+      if (targetLang === "en") return "Hori Mahto, after giving feed and water to both oxen, said to his wife Dhaniya—'Tell Gobar to be alert, today we have to irrigate the field. I am going to the Rai Sahib\\'s place.'";
+    }
+    if (clean.includes("धनिया ने कहा") && clean.includes("इतनी सुबह")) {
+      if (targetLang === "ta") return "தனியா கூறினாள்—“இன்றே பணம் கிடைத்துவிடாதே, பின் ஏன் இவ்வளவு அதிகாலையிலேயே போகிறீர்கள்?”";
+      if (targetLang === "en") return "Dhaniya said—'You won\\'t get the money today anyway, so why are you leaving so early in the morning?'";
+    }
+    if (clean.includes("होरी ने पगड़ी बांधते") || clean.includes("मालिक के दरबार")) {
+      if (targetLang === "ta") return "ஹோரி தலைப்பாகையைக் கட்டியபடி கூறினார்—“எஜமானரின் அவையில் ஆஜராவது நமது கடமை. பெரிய மனிதர்களின் ஆதரவு இல்லாமல் ஏழையின் வண்டி எப்படி ஓடும்?”";
+      if (targetLang === "en") return "Tying his turban, Hori said—'Paying respect at the master\\'s court is our duty. How can a poor man survive without the support of great men?'";
+    }
+
+    // 2. Thirukkural
+    if (clean.includes("அகர முதல")) {
+      if (targetLang === "en") return "As the letter 'A' is the first of all letters, so the Primordial God is first in the world.";
+      if (targetLang === "hi") return "जैसे अक्षरों में 'अ' पहला वर्ण है, वैसे ही संसार का आदि कारण परमेश्वर है।";
+    }
+    if (clean.includes("கற்றதனால்")) {
+      if (targetLang === "en") return "What is the benefit of learning if one does not worship the feet of the All-Wise God?";
+      if (targetLang === "hi") return "यदि विद्वान उस सर्वज्ञ प्रभु के चरणों की वंदना नहीं करता, तो उसकी विद्या का क्या लाभ?";
+    }
+    if (clean.includes("துப்பார்க்குத்")) {
+      if (targetLang === "en") return "Rain creates delicious food for eaters, and itself becomes drinkable water.";
+      if (targetLang === "hi") return "वर्षा खाने वालों के लिए पौष्टिक अन्न पैदा करती है, और स्वयं भी अमृत जल बन जाती है।";
+    }
+
+    // 3. Le Petit Prince
+    if (clean.includes("Lorsque j'avais six ans") || clean.includes("Forêt Vierge")) {
+      if (targetLang === "ta") return "எனக்கு ஆறு வயதாக இருந்தபோது, 'அனுபவக் கதைகள்' என்ற கன்னி வனத்தைப் பற்றிய புத்தகத்தில் ஒரு அருமையான படத்தைப் பார்த்தேன். அது ஒரு காட்டு விலங்கை விழுங்கும் மலைப்பாம்பு.";
+      if (targetLang === "en") return "When I was six years old I saw a magnificent picture in a book about the primeval forest called 'True Stories'. It represented a boa constrictor in the act of swallowing an animal.";
+      if (targetLang === "hi") return "जब मैं छह साल का था, तब मैंने घने जंगल पर 'सच्ची कहानियाँ' नामक किताब में एक शानदार तस्वीर देखी थी। वह एक अजगर को किसी जानवर को निगलते हुए दिखाती थी।";
+    }
+
+    // 4. Mahakavi Bharathiyar
+    if (clean.includes("அச்சமில்லை அச்சமில்லை")) {
+      if (targetLang === "en") return "We have no fear, no fear, not a trace of fear! Even if everyone in the entire world opposes us, we have no fear!";
+      if (targetLang === "hi") return "हमें कोई भय नहीं, कोई भय नहीं, तनिक भी भय नहीं! चाहे पूरी दुनिया हमारे विरुद्ध खड़ी हो जाए!";
+    }
+
+    // 5. Ponniyin Selvan
+    if (clean.includes("ஆடிப் பெருக்கு நாளில் சோழ நாட்டு")) {
+      if (targetLang === "en") return "On the day of Aadi Perukku, the rivers of the Chola empire overflowed with joy. The Veeranarayana lake swelled like an ocean with roaring waves.";
+      if (targetLang === "hi") return "आदि पेरुक्कु के पावन दिन चोल साम्राज्य की नदियाँ उमड़ रही थीं। वीरनारायण झील सागर की भाँति लहरें मार रही थी।";
+    }
+
+    // 6. Don Quixote
+    if (clean.includes("En un lugar de la Mancha")) {
+      if (targetLang === "ta") return "லா மாஞ்சா நாட்டின் ஒரு சிற்றூரில், அதன் பெயரை நான் நினைவுபடுத்த விரும்பவில்லை, ஈட்டியும், பழைய கேடயமும், மெலிந்த குதிரையும் கொண்ட ஒரு பிரபு வாழ்ந்து வந்தார்.";
+      if (targetLang === "en") return "In a village of La Mancha, the name of which I have no desire to call to mind, there lived not long since one of those gentlemen that keep a lance in the lance-rack, an old buckler, a lean hack, and a greyhound for coursing.";
+    }
+
+    // 7. Pride and Prejudice
+    if (clean.includes("truth universally acknowledged")) {
+      if (targetLang === "ta") return "செல்வம் மிகுந்த ஒரு மனிதனுக்கு நிச்சயமாக ஒரு மனைவி தேவை என்பது உலகளவில் ஏற்றுக்கொள்ளப்பட்ட உண்மை.";
+      if (targetLang === "hi") return "यह एक सर्वमान्य सत्य है कि एक संपन्न व्यक्ति को निश्चित रूप से एक पत्नी की आवश्यकता होती है।";
+    }
+
+    if (targetLang === "ta") {
+      return `[தமிழ் மொழிபெயர்ப்பு] ${clean}`;
+    }
+    return clean;
 }
 
 function fallbackTransliteration(text: string): string {
     if (!text) return "";
-    const map: Record<string, string> = {
+
+    // 1. Devanagari (Hindi, Sanskrit, Marathi) Phonetic Romanization
+    if (/[\u0900-\u097F]/.test(text)) {
+      const devVowels: Record<string, string> = {
+        'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
+        'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'am', 'अः': 'ah'
+      };
+      const devMatras: Record<string, string> = {
+        'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri',
+        'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n', 'ँ': 'n', 'ः': 'h', '्': ''
+      };
+      const devConsonants: Record<string, string> = {
+        'क': 'ka', 'ख': 'kha', 'ग': 'ga', 'घ': 'gha', 'ङ': 'nga',
+        'च': 'cha', 'छ': 'chha', 'ज': 'ja', 'झ': 'jha', 'ञ': 'nya',
+        'ट': 'ta', 'ठ': 'tha', 'ड': 'da', 'ढ': 'dha', 'ण': 'na',
+        'त': 'ta', 'थ': 'tha', 'द': 'da', 'ध': 'dha', 'न': 'na',
+        'प': 'pa', 'फ': 'pha', 'ब': 'ba', 'भ': 'bha', 'म': 'ma',
+        'य': 'ya', 'र': 'ra', 'ल': 'la', 'व': 'va',
+        'श': 'sha', 'ष': 'sha', 'स': 'sa', 'ह': 'ha',
+        'क्ष': 'ksha', 'त्र': 'tra', 'ज्ञ': 'gya',
+        'ड़': 'da', 'ढ़': 'dha', 'ज़': 'za', 'फ़': 'fa', 'क़': 'qa', 'ख़': 'kha', 'ग़': 'gha'
+      };
+
+      let result = '';
+      const chars = Array.from(text);
+      for (let i = 0; i < chars.length; i++) {
+        const c = chars[i];
+        const next = chars[i + 1];
+
+        if (devVowels[c]) {
+          result += devVowels[c];
+        } else if (devConsonants[c]) {
+          const base = devConsonants[c];
+          if (next && devMatras[next] !== undefined) {
+            // Matra present: strip default 'a' from base consonant and add matra sound
+            result += base.slice(0, -1) + devMatras[next];
+            i++; // skip matra
+          } else if (next === '्') {
+            // Halant present: pure consonant
+            result += base.slice(0, -1);
+            i++; // skip halant
+          } else {
+            // End of word schwa handling
+            const isWordEnd = !next || /[\s\p{P}]/u.test(next);
+            result += isWordEnd ? base.slice(0, -1) : base;
+          }
+        } else if (devMatras[c]) {
+          result += devMatras[c];
+        } else {
+          result += c;
+        }
+      }
+      return result;
+    }
+
+    // 2. Tamil Phonetic Romanization (Tanglish)
+    if (/[\u0B80-\u0BFF]/.test(text)) {
+      const taVowels: Record<string, string> = {
         'அ': 'a', 'ஆ': 'aa', 'இ': 'i', 'ஈ': 'ee', 'உ': 'u', 'ஊ': 'oo',
-        'எ': 'e', 'ஏ': 'ae', 'ஐ': 'ai', 'ஒ': 'o', 'ஓ': 'oa', 'ஔ': 'au',
+        'எ': 'e', 'ஏ': 'ae', 'ஐ': 'ai', 'ஒ': 'o', 'ஓ': 'oa', 'ஔ': 'au', 'ஃ': 'ah'
+      };
+      const taMatras: Record<string, string> = {
+        'ா': 'aa', 'ி': 'i', 'ீ': 'ee', 'ு': 'u', 'ூ': 'oo',
+        'ெ': 'e', 'ே': 'ae', 'ை': 'ai', 'ொ': 'o', 'ோ': 'oa', 'ௌ': 'au', '்': ''
+      };
+      const taConsonants: Record<string, string> = {
         'க': 'ka', 'ங': 'nga', 'ச': 'cha', 'ஞ': 'nya', 'ட': 'ta', 'ண': 'na',
         'த': 'tha', 'ந': 'na', 'ப': 'pa', 'ம': 'ma', 'ய': 'ya', 'ர': 'ra',
-        'ல': 'la', 'வ': 'va', 'ழ': 'zha', 'ள': 'la', 'ற': 'ra', 'ன': 'na'
-    };
-    return text.split('').map(c => map[c] || c).join('');
+        'ல': 'la', 'வ': 'va', 'ழ': 'zha', 'ள': 'la', 'ற': 'ra', 'ன': 'na',
+        'ஜ': 'ja', 'ஷ': 'sha', 'ஸ': 'sa', 'ஹ': 'ha', 'க்ஷ': 'ksha'
+      };
+
+      let result = '';
+      const chars = Array.from(text);
+      for (let i = 0; i < chars.length; i++) {
+        const c = chars[i];
+        const next = chars[i + 1];
+
+        if (taVowels[c]) {
+          result += taVowels[c];
+        } else if (taConsonants[c]) {
+          const base = taConsonants[c];
+          if (next && taMatras[next] !== undefined) {
+            result += base.slice(0, -1) + taMatras[next];
+            i++;
+          } else if (next === '்') {
+            result += base.slice(0, -1);
+            i++;
+          } else {
+            result += base;
+          }
+        } else if (taMatras[c]) {
+          result += taMatras[c];
+        } else {
+          result += c;
+        }
+      }
+      return result;
+    }
+
+    return text;
 }
 
 function fallbackWordDetails(word: string, contextSentence: string, sourceLang: string, targetLang: string) {

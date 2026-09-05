@@ -304,8 +304,8 @@ export function cleanBinaryToText(raw: string): string {
   // 2. Remove broken PDF glyph artifacts like dotted circles (◌ \u25CC, \u25CB, \uFFFD) and zero-width spaces
   text = text.replace(/[\u25CC\u25CB\u25CD\uFFFD\u200B\u200C\u200D\uFEFF]/g, '');
 
-  // 3. Keep printable ASCII (32-126), tabs/newlines (9, 10, 13), and extended Unicode ranges (Latin, Tamil 0x0B80-0x0BFF, General Punctuation)
-  text = text.replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F\u0B80-\u0BFF\u2000-\u206F\u2070-\u209F\u20A0-\u20CF]/g, ' ');
+  // 3. Keep printable ASCII (32-126), tabs/newlines (9, 10, 13), and all international Unicode ranges (Latin, Devanagari, Tamil, Telugu, Malayalam, Kannada, Bengali, Gujarati, Punjabi, Arabic, Cyrillic, CJK, Hangul, Punctuation)
+  text = text.replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F\u0400-\u04FF\u0600-\u06FF\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\u0D80-\u0DFF\u2000-\u206F\u2070-\u209F\u20A0-\u20CF\u3000-\u9FFF\uAC00-\uD7AF]/g, ' ');
 
   // 4. Strip domain names, URLs, and e-book watermark brands inline
   text = text
